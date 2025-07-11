@@ -32,8 +32,8 @@ type MemoryRegistry struct {
 	entries map[string]RegistryEntry
 }
 
-// NewMemoryRegistry creates a new in-memory registry
-func NewMemoryRegistry() *MemoryRegistry {
+// newMemoryRegistry creates a new in-memory registry (private)
+func newMemoryRegistry() *MemoryRegistry {
 	return &MemoryRegistry{
 		entries: make(map[string]RegistryEntry),
 	}

@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
@@ -157,8 +156,3 @@ func decodeAndVerify(ctx Context, publicKey *ecdsa.PublicKey) (*ContextData, err
 	return &data, nil
 }
 
-// getCertificateFingerprint computes SHA256 fingerprint of a certificate
-func getCertificateFingerprint(cert *x509.Certificate) string {
-	hash := sha256.Sum256(cert.Raw)
-	return base64.StdEncoding.EncodeToString(hash[:])
-}

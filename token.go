@@ -1,7 +1,6 @@
 package sctx
 
 import (
-	"crypto/tls"
 	"sync"
 	"time"
 )
@@ -53,13 +52,6 @@ func (t *Token) IsExpired() bool {
 	return time.Now().After(t.expiresAt)
 }
 
-// NeedsRefresh checks if the token should be refreshed soon
-func (t *Token) NeedsRefresh() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	// Refresh if less than 30 seconds remain
-	return time.Until(t.expiresAt) < 30*time.Second
-}
 
 // TimeUntilExpiry returns how long until the token expires
 func (t *Token) TimeUntilExpiry() time.Duration {
@@ -83,9 +75,3 @@ func (t *Token) update(ctx Context, expiresAt time.Time) {
 	t.expiresAt = expiresAt
 }
 
-// Refresh attempts to refresh this token using the provided service.
-// The TLS connection state is required to prove ownership of the certificate.
-// Returns an error if the token is invalid or cannot be refreshed.
-func (t *Token) Refresh(service *ContextService, tlsState *tls.ConnectionState) error {
-	return service.RefreshToken(t, tlsState)
-}

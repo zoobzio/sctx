@@ -25,8 +25,8 @@ type requestTracker struct {
 	firstRequest time.Time
 }
 
-// NewRateLimiter creates a new rate limiter
-func NewRateLimiter(maxRequests int, window time.Duration, shutdown chan struct{}, wg *sync.WaitGroup) *RateLimiter {
+// newRateLimiter creates a new rate limiter (private)
+func newRateLimiter(maxRequests int, window time.Duration, shutdown chan struct{}, wg *sync.WaitGroup) *RateLimiter {
 	rl := &RateLimiter{
 		requests:        make(map[string]*requestTracker),
 		maxRequests:     maxRequests,

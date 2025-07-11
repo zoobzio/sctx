@@ -1,6 +1,7 @@
 package sctx
 
 import (
+	"crypto/ecdsa"
 	"errors"
 	"strings"
 	"sync"
@@ -8,70 +9,65 @@ import (
 )
 
 var (
-	ErrAdminAlreadyExists = errors.New("service admin already exists")
 	ErrNotAdmin          = errors.New("invalid admin credentials")
 	ErrNoServiceInstance = errors.New("context service not initialized")
+	ErrAlreadyBootstrapped = errors.New("system already bootstrapped")
 )
 
 // ServiceAdmin provides administrative control over the ContextService.
-// Only one admin instance can exist, and it requires valid admin credentials to create.
+// It requires valid admin credentials to create and holds private access to the service.
 type ServiceAdmin struct {
+	service *ContextService
 	created time.Time
 	mu      sync.Mutex
 }
 
-// Global admin singleton
-var (
-	adminInstance *ServiceAdmin
-	adminOnce     sync.Once
-	
-	// Global service instance that admin controls
-	globalContextService *ContextService
-	serviceMu           sync.RWMutex
-)
+// bootstrapOnce ensures bootstrap can only happen once
+var bootstrapOnce sync.Once
+var bootstrapErr error
 
-// InitializeContextService initializes the global context service instance
-func InitializeContextService(config ContextServiceConfig) error {
-	serviceMu.Lock()
-	defer serviceMu.Unlock()
+// Bootstrap initializes the context service and returns the first admin
+// This is the ONLY way to create a context service - ensuring admin control from the start
+func Bootstrap(config ContextServiceConfig) (*ServiceAdmin, error) {
+	var admin *ServiceAdmin
 	
-	if globalContextService != nil {
-		return errors.New("context service already initialized")
+	bootstrapOnce.Do(func() {
+		// Create the service (using private constructor)
+		service, err := newContextService(config)
+		if err != nil {
+			bootstrapErr = err
+			return
+		}
+		
+		// Create the first admin
+		// The admin token will be created on first RequestContext
+		// when the admin identity matches
+		admin = &ServiceAdmin{
+			service: service,
+			created: time.Now(),
+		}
+	})
+	
+	if bootstrapErr != nil {
+		return nil, bootstrapErr
 	}
 	
-	svc, err := NewContextService(config)
-	if err != nil {
-		return err
+	if admin == nil {
+		return nil, ErrAlreadyBootstrapped
 	}
 	
-	globalContextService = svc
-	return nil
+	return admin, nil
 }
 
-// GetContextService returns the global context service instance
-func GetContextService() (*ContextService, error) {
-	serviceMu.RLock()
-	defer serviceMu.RUnlock()
-	
-	if globalContextService == nil {
-		return nil, ErrNoServiceInstance
-	}
-	
-	return globalContextService, nil
-}
-
-// NewServiceAdmin creates the singleton admin instance after verifying credentials
-func NewServiceAdmin(adminContext Context) (*ServiceAdmin, error) {
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
-	
+// NewServiceAdmin creates an admin instance after verifying credentials
+// This is the ONLY way to perform administrative operations on the service
+func NewServiceAdmin(service *ContextService, adminContext Context) (*ServiceAdmin, error) {
 	if service == nil {
 		return nil, ErrNoServiceInstance
 	}
 	
 	// Verify the admin context using the service's internal key
-	data, err := decodeAndVerify(adminContext, service.publicKey)
+	data, err := decodeAndVerify(adminContext, service.issuer.GetPublicKey())
 	if err != nil {
 		return nil, ErrNotAdmin
 	}
@@ -86,19 +82,10 @@ func NewServiceAdmin(adminContext Context) (*ServiceAdmin, error) {
 		return nil, ErrNotAdmin
 	}
 	
-	var created bool
-	adminOnce.Do(func() {
-		adminInstance = &ServiceAdmin{
-			created: time.Now(),
-		}
-		created = true
-	})
-	
-	if !created {
-		return nil, ErrAdminAlreadyExists
-	}
-	
-	return adminInstance, nil
+	return &ServiceAdmin{
+		service: service,
+		created: time.Now(),
+	}, nil
 }
 
 // RegisterFactory adds a new context factory
@@ -106,32 +93,10 @@ func (a *ServiceAdmin) RegisterFactory(factory *ContextFactory) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
 	
-	if service == nil {
-		return ErrNoServiceInstance
-	}
-	
-	if service.factoryRegistrationLocked {
+	if a.service.factoryManager.IsLocked() {
 		return errors.New("factory registration window has closed")
 	}
-	
-	// Validate factory ID
-	if factory.ID == "" {
-		return errors.New("factory ID is required")
-	}
-	
-	// Check for duplicate ID
-	service.factoriesMu.RLock()
-	for _, existing := range service.factories {
-		if existing.ID == factory.ID {
-			service.factoriesMu.RUnlock()
-			return errors.New("factory ID already exists")
-		}
-	}
-	service.factoriesMu.RUnlock()
 	
 	// Validate no wildcard permissions
 	for _, perm := range factory.Permissions {
@@ -140,18 +105,8 @@ func (a *ServiceAdmin) RegisterFactory(factory *ContextFactory) error {
 		}
 	}
 	
-	// Compile the factory regex
-	if err := factory.Compile(); err != nil {
-		return err
-	}
-	
-	// Enable by default
-	factory.Enabled = true
-	
-	service.factoriesMu.Lock()
-	service.factories = append(service.factories, factory)
-	service.factoriesMu.Unlock()
-	return nil
+	// Register with factory manager
+	return a.service.factoryManager.RegisterFactory(factory)
 }
 
 // RegisterIdentity adds a specific identity to the registry
@@ -159,13 +114,6 @@ func (a *ServiceAdmin) RegisterIdentity(identity string, entry RegistryEntry) er
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
-	
-	if service == nil {
-		return ErrNoServiceInstance
-	}
 	
 	// Validate no wildcard permissions
 	for _, perm := range entry.Permissions {
@@ -174,7 +122,7 @@ func (a *ServiceAdmin) RegisterIdentity(identity string, entry RegistryEntry) er
 		}
 	}
 	
-	return service.registry.Register(identity, entry)
+	return a.service.registry.Register(identity, entry)
 }
 
 // LockFactoryRegistration prevents any new factories from being registered
@@ -182,15 +130,8 @@ func (a *ServiceAdmin) LockFactoryRegistration() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
 	
-	if service == nil {
-		return ErrNoServiceInstance
-	}
-	
-	service.factoryRegistrationLocked = true
+	a.service.factoryManager.Lock()
 	return nil
 }
 
@@ -199,21 +140,14 @@ func (a *ServiceAdmin) CompleteBootstrap() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
-	
-	if service == nil {
-		return ErrNoServiceInstance
-	}
 	
 	// Mark bootstrap as complete
-	service.adminBootstrapComplete = true
-	service.factoryRegistrationLocked = true
+	a.service.adminBootstrapComplete = true
+	a.service.factoryManager.Lock()
 	
 	// Ensure the sync.Once has been triggered
 	// This prevents any future admin context creation
-	service.adminBootstrapOnce.Do(func() {
+	a.service.adminBootstrapOnce.Do(func() {
 		// No-op, just ensuring it's been called
 	})
 	
@@ -225,80 +159,34 @@ func (a *ServiceAdmin) RevokeToken(certificateFingerprint string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
 	
-	if service == nil {
-		return ErrNoServiceInstance
-	}
-	
-	service.activeTokensMu.Lock()
-	defer service.activeTokensMu.Unlock()
-	
-	if _, exists := service.activeTokens[certificateFingerprint]; !exists {
+	token, exists := a.service.tokenStore.Get(certificateFingerprint)
+	if !exists {
 		return errors.New("no active token for this certificate")
 	}
+	_ = token // avoid unused variable
 	
-	delete(service.activeTokens, certificateFingerprint)
-	return nil
+	return a.service.tokenStore.Delete(certificateFingerprint)
 }
 
-// ListActiveTokens returns information about all active tokens
-func (a *ServiceAdmin) ListActiveTokens() ([]*ActiveTokenInfo, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
-	
-	if service == nil {
-		return nil, ErrNoServiceInstance
-	}
-	
-	var tokens []*ActiveTokenInfo
-	service.activeTokensMu.RLock()
-	for fingerprint, token := range service.activeTokens {
-		tokens = append(tokens, &ActiveTokenInfo{
-			CertificateFingerprint: fingerprint,
-			ContextID:              token.ContextID,
-			Identity:               token.Identity,
-			IssuedAt:               token.IssuedAt,
-			ExpiresAt:              token.ExpiresAt,
-			Permissions:            token.Permissions,
-			FactoryID:              token.FactoryID,
-			RefreshCount:           token.RefreshCount,
-		})
-	}
-	service.activeTokensMu.RUnlock()
-	
-	return tokens, nil
-}
 
 // GetMetrics returns current service metrics
 func (a *ServiceAdmin) GetMetrics() (*ServiceMetrics, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
-	
-	if service == nil {
-		return nil, ErrNoServiceInstance
+	// Get active token count
+	activeTokens := 0
+	if store, ok := a.service.tokenStore.(*memoryTokenStore); ok {
+		activeTokens = store.Count()
 	}
 	
-	service.activeTokensMu.RLock()
-	activeTokens := len(service.activeTokens)
-	service.activeTokensMu.RUnlock()
-	
 	return &ServiceMetrics{
-		RegisteredIdentities: len(service.registry.List()),
-		ActiveFactories:     len(service.factories),
+		RegisteredIdentities: len(a.service.registry.List()),
+		ActiveFactories:     len(a.service.factoryManager.ListFactories()),
 		ActiveTokens:        activeTokens,
-		BootstrapComplete:   service.adminBootstrapComplete,
-		FactoriesLocked:     service.factoryRegistrationLocked,
+		BootstrapComplete:   a.service.adminBootstrapComplete,
+		FactoriesLocked:     a.service.factoryManager.IsLocked(),
 	}, nil
 }
 
@@ -307,25 +195,14 @@ func (a *ServiceAdmin) DisableFactory(factoryID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
 	
-	if service == nil {
-		return ErrNoServiceInstance
+	factory, exists := a.service.factoryManager.GetFactory(factoryID)
+	if !exists {
+		return errors.New("factory not found")
 	}
 	
-	service.factoriesMu.RLock()
-	for _, factory := range service.factories {
-		if factory.ID == factoryID {
-			service.factoriesMu.RUnlock()
-			factory.Enabled = false
-			return nil
-		}
-	}
-	service.factoriesMu.RUnlock()
-	
-	return errors.New("factory not found")
+	factory.Enabled = false
+	return nil
 }
 
 // EnableFactory re-enables a disabled factory
@@ -333,25 +210,14 @@ func (a *ServiceAdmin) EnableFactory(factoryID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
 	
-	if service == nil {
-		return ErrNoServiceInstance
+	factory, exists := a.service.factoryManager.GetFactory(factoryID)
+	if !exists {
+		return errors.New("factory not found")
 	}
 	
-	service.factoriesMu.RLock()
-	for _, factory := range service.factories {
-		if factory.ID == factoryID {
-			service.factoriesMu.RUnlock()
-			factory.Enabled = true
-			return nil
-		}
-	}
-	service.factoriesMu.RUnlock()
-	
-	return errors.New("factory not found")
+	factory.Enabled = true
+	return nil
 }
 
 // ListFactories returns information about all registered factories
@@ -359,17 +225,8 @@ func (a *ServiceAdmin) ListFactories() ([]*FactoryInfo, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	
-	serviceMu.RLock()
-	service := globalContextService
-	serviceMu.RUnlock()
-	
-	if service == nil {
-		return nil, ErrNoServiceInstance
-	}
-	
 	var infos []*FactoryInfo
-	service.factoriesMu.RLock()
-	for _, factory := range service.factories {
+	for _, factory := range a.service.factoryManager.ListFactories() {
 		factory.mu.Lock()
 		info := &FactoryInfo{
 			ID:           factory.ID,
@@ -386,7 +243,6 @@ func (a *ServiceAdmin) ListFactories() ([]*FactoryInfo, error) {
 		factory.mu.Unlock()
 		infos = append(infos, info)
 	}
-	service.factoriesMu.RUnlock()
 	
 	return infos, nil
 }
@@ -414,14 +270,44 @@ type ServiceMetrics struct {
 	FactoriesLocked     bool
 }
 
-// ActiveTokenInfo contains information about an active token
-type ActiveTokenInfo struct {
-	CertificateFingerprint string
-	ContextID              string
-	Identity               string
-	IssuedAt               time.Time
-	ExpiresAt              time.Time
-	Permissions            []string
-	FactoryID              string
-	RefreshCount           int
+
+// GetPublicKey returns the service's public key for verification
+// This is an admin-only operation
+func (a *ServiceAdmin) GetPublicKey() *ecdsa.PublicKey {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	
+	return a.service.issuer.GetPublicKey()
+}
+
+// GetStats returns service statistics
+// This is an admin-only operation  
+func (a *ServiceAdmin) GetStats() ServiceStats {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	
+	activeFactories := 0
+	for _, f := range a.service.factoryManager.ListFactories() {
+		if f.IsActive() {
+			activeFactories++
+		}
+	}
+	
+	// Get active token count
+	activeTokens := 0
+	if store, ok := a.service.tokenStore.(*memoryTokenStore); ok {
+		activeTokens = store.Count()
+	}
+	
+	return ServiceStats{
+		ActiveFactories:   activeFactories,
+		ActiveTokens:      activeTokens,
+		AdminBootstrapped: a.service.adminBootstrapComplete,
+	}
+}
+
+// GetService returns the context service for requesting contexts
+// This allows the admin to get contexts like any other client
+func (a *ServiceAdmin) GetService() *ContextService {
+	return a.service
 }

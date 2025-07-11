@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # Certificate generation service
+  cert-gen:
+    image: golang:1.21-alpine
+    working_dir: /certs
+    volumes:
+      - ./certs:/certs
+      - ./scripts:/scripts
+    command: sh -c "apk add --no-cache bash openssl && /scripts/generate-certs.sh"
+    
+  # SCTX demo server
+  sctx-demo:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    depends_on:
+      cert-gen:
+        condition: service_completed_successfully
+    ports:
+      - "8443:8443"  # Main service port
+      - "8444:8444"  # Admin port
+    volumes:
+      - ./certs:/app/certs:ro
+    environment:
+      - LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "--cert", "/app/certs/sctx-admin/cert.pem", "--key", "/app/certs/sctx-admin/key.pem", "https://localhost:8443/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Test runner
+  test-runner:
+    image: alpine:latest
+    depends_on:
+      sctx-demo:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+      - ./scripts:/scripts:ro
+    working_dir: /
+    command: sh -c "apk add --no-cache bash curl && /scripts/test-scenarios.sh"
+
+  # Interactive client for manual testing
+  test-client:
+    image: alpine:latest
+    depends_on:
+      sctx-demo:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+    working_dir: /
+    command: sh -c "apk add --no-cache bash curl openssl && echo 'Interactive client ready. Use curl with client certs from /certs/' && tail -f /dev/null"
+    profiles:
+      - interactive
