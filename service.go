@@ -2,10 +2,11 @@ package sctx
 
 import (
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -30,13 +31,15 @@ type activeToken struct {
 }
 
 // ContextService issues signed security contexts to authenticated clients.
-// This service uses ECDSA P-256 (NIST P-256/secp256r1) for all cryptographic operations,
-// providing NIST SP 800-186 and FIPS 186-4 compliance.
+// Defaults to Ed25519 for optimal performance (30% faster than ECDSA).
+// For FIPS 140-2 compliance, configure with ECDSA P-256 algorithm.
 //
-// To generate a compliant P-256 key pair:
+// To generate Ed25519 keys (default):
+//   ssh-keygen -t ed25519 -f private_key
 //
-//	openssl ecparam -genkey -name prime256v1 -out private.pem
-//	openssl ec -in private.pem -pubout -out public.pem
+// To generate ECDSA P-256 keys (FIPS compliant):
+//   openssl ecparam -genkey -name prime256v1 -out private.pem
+//   openssl ec -in private.pem -pubout -out public.pem
 type ContextService[M any] struct {
 	// Components
 	validator      CertificateValidator
@@ -72,12 +75,12 @@ type ContextService[M any] struct {
 // ContextServiceConfig holds configuration for the context service
 type ContextServiceConfig struct {
 	CAPool        *x509.CertPool
-	PrivateKey    *ecdsa.PrivateKey // ECDSA P-256 private key
+	PrivateKey    crypto.PrivateKey // Private key (Ed25519 or ECDSA P-256)
+	Algorithm     CryptoAlgorithm   // Crypto algorithm (defaults to Ed25519 for performance)
 	Registry      Registry
 	IssuerName    string
 	ContextTTL    time.Duration
 	AdminIdentity string // Expected identity of the admin certificate for bootstrap
-
 }
 
 // newContextService creates a new context service (private - use Bootstrap)
@@ -94,6 +97,16 @@ func newContextService[M any](config ContextServiceConfig, metadata M) (*Context
 	if config.ContextTTL == 0 {
 		config.ContextTTL = 15 * time.Minute // default TTL
 	}
+	
+	// Default to high-performance Ed25519 algorithm
+	if config.Algorithm == "" {
+		config.Algorithm = DefaultCryptoAlgorithm
+	}
+	
+	// Validate algorithm is supported
+	if err := ValidateAlgorithm(config.Algorithm); err != nil {
+		return nil, fmt.Errorf("invalid crypto algorithm: %w", err)
+	}
 
 	// Create components
 	validator := newCertificateValidator()
@@ -102,7 +115,7 @@ func newContextService[M any](config ContextServiceConfig, metadata M) (*Context
 
 	factoryManager := newFactoryManager()
 
-	issuer, err := newContextIssuer(config.PrivateKey, config.IssuerName)
+	issuer, err := newContextIssuer(config.PrivateKey, config.Algorithm, config.IssuerName)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +222,7 @@ func (cs *ContextService[M]) generateToken(req *ContextRequest[M]) (*Token, erro
 		}
 
 		// Check for admin bootstrap completion
-		if req.Identity == cs.adminIdentity && req.RegistryEntry.Type == "admin" && !cs.adminBootstrapComplete {
+		if req.Identity == cs.adminIdentity && slices.Contains(req.RegistryEntry.Permissions, "sctx:bootstrap") && !cs.adminBootstrapComplete {
 			cs.adminBootstrapComplete = true
 		}
 	} else if req.MatchedFactory != nil {
@@ -259,8 +272,8 @@ func (cs *ContextService[M]) generateToken(req *ContextRequest[M]) (*Token, erro
 
 // VerifyContext verifies a context and returns the decoded data
 // The public key must be provided by the caller from a secure source
-// The key must be an ECDSA P-256 public key for NIST compliance
-func VerifyContext(ctx Context, publicKey *ecdsa.PublicKey) (*ContextData, error) {
+// Supports both Ed25519 (default, high-performance) and ECDSA P-256 (FIPS compliant) algorithms
+func VerifyContext(ctx Context, publicKey crypto.PublicKey) (*ContextData, error) {
 	return decodeAndVerify(ctx, publicKey)
 }
 

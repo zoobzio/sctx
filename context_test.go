@@ -1,9 +1,6 @@
 package sctx
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -67,10 +64,7 @@ func TestContextData_IsExpired(t *testing.T) {
 // Test cryptographic functions
 func TestEncodeAndSign_ValidData(t *testing.T) {
 	// Generate test key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	_, signer := generateTestECDSAKey(t)
 
 	data := &ContextData{
 		Type:        "service",
@@ -84,7 +78,7 @@ func TestEncodeAndSign_ValidData(t *testing.T) {
 
 	fingerprint := "test-fingerprint"
 
-	ctx, err := encodeAndSign(data, privateKey, fingerprint)
+	ctx, err := encodeAndSign(data, signer, fingerprint)
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -107,10 +101,7 @@ func TestEncodeAndSign_ValidData(t *testing.T) {
 
 func TestDecodeAndVerify_ValidSignature(t *testing.T) {
 	// Generate test key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 
 	originalData := &ContextData{
 		Type:        "service",
@@ -125,7 +116,7 @@ func TestDecodeAndVerify_ValidSignature(t *testing.T) {
 	fingerprint := "test-fingerprint"
 
 	// Sign the data
-	ctx, err := encodeAndSign(originalData, privateKey, fingerprint)
+	ctx, err := encodeAndSign(originalData, signer, fingerprint)
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -153,14 +144,8 @@ func TestDecodeAndVerify_ValidSignature(t *testing.T) {
 
 func TestDecodeAndVerify_InvalidSignature(t *testing.T) {
 	// Generate two different keys
-	privateKey1, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key1: %v", err)
-	}
-	privateKey2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key2: %v", err)
-	}
+	_, signer1 := generateTestECDSAKey(t)
+	privateKey2, _ := generateTestECDSAKey(t)
 
 	data := &ContextData{
 		Type:        "service",
@@ -173,7 +158,7 @@ func TestDecodeAndVerify_InvalidSignature(t *testing.T) {
 	}
 
 	// Sign with key1
-	ctx, err := encodeAndSign(data, privateKey1, "test-fingerprint")
+	ctx, err := encodeAndSign(data, signer1, "test-fingerprint")
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -186,10 +171,7 @@ func TestDecodeAndVerify_InvalidSignature(t *testing.T) {
 }
 
 func TestDecodeAndVerify_TamperedData(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 
 	data := &ContextData{
 		Type:        "service",
@@ -201,7 +183,7 @@ func TestDecodeAndVerify_TamperedData(t *testing.T) {
 		ContextID:   "test-context-123",
 	}
 
-	ctx, err := encodeAndSign(data, privateKey, "test-fingerprint")
+	ctx, err := encodeAndSign(data, signer, "test-fingerprint")
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -233,10 +215,7 @@ func TestDecodeAndVerify_TamperedData(t *testing.T) {
 }
 
 func TestDecodeAndVerify_ExpiredContext(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 
 	// Create already expired context
 	data := &ContextData{
@@ -249,7 +228,7 @@ func TestDecodeAndVerify_ExpiredContext(t *testing.T) {
 		ContextID:   "test-context-123",
 	}
 
-	ctx, err := encodeAndSign(data, privateKey, "test-fingerprint")
+	ctx, err := encodeAndSign(data, signer, "test-fingerprint")
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -261,10 +240,7 @@ func TestDecodeAndVerify_ExpiredContext(t *testing.T) {
 }
 
 func TestDecodeAndVerify_InvalidFormats(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, _ := generateTestECDSAKey(t)
 
 	tests := []struct {
 		name    string
@@ -304,10 +280,7 @@ func TestDecodeAndVerify_InvalidFormats(t *testing.T) {
 }
 
 func TestEncodeAndSign_EdgeCases(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	_, signer := generateTestECDSAKey(t)
 
 	tests := []struct {
 		name        string
@@ -367,7 +340,7 @@ func TestEncodeAndSign_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := encodeAndSign(tt.data, privateKey, tt.fingerprint)
+			_, err := encodeAndSign(tt.data, signer, tt.fingerprint)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("encodeAndSign() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -376,10 +349,7 @@ func TestEncodeAndSign_EdgeCases(t *testing.T) {
 }
 
 func TestRoundTripWithDifferentData(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 
 	testCases := []struct {
 		name string
@@ -426,7 +396,7 @@ func TestRoundTripWithDifferentData(t *testing.T) {
 			fingerprint := "test-fp-" + tc.name
 
 			// Encode and sign
-			ctx, err := encodeAndSign(tc.data, privateKey, fingerprint)
+			ctx, err := encodeAndSign(tc.data, signer, fingerprint)
 			if err != nil {
 				t.Fatalf("encodeAndSign failed: %v", err)
 			}
@@ -455,10 +425,7 @@ func TestRoundTripWithDifferentData(t *testing.T) {
 
 // Test for potential timing attacks in signature verification
 func TestDecodeAndVerify_ConsistentTiming(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 
 	data := &ContextData{
 		Type:        "service",
@@ -468,7 +435,7 @@ func TestDecodeAndVerify_ConsistentTiming(t *testing.T) {
 		ExpiresAt:   time.Now().Add(time.Hour),
 	}
 
-	ctx, err := encodeAndSign(data, privateKey, "fp")
+	ctx, err := encodeAndSign(data, signer, "fp")
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -496,10 +463,7 @@ func TestDecodeAndVerify_ConsistentTiming(t *testing.T) {
 
 // Verify the public function matches our implementation
 func TestVerifyContext_PublicFunction(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 
 	data := &ContextData{
 		Type:        "service",
@@ -511,7 +475,7 @@ func TestVerifyContext_PublicFunction(t *testing.T) {
 		ContextID:   "test-context-123",
 	}
 
-	ctx, err := encodeAndSign(data, privateKey, "test-fingerprint")
+	ctx, err := encodeAndSign(data, signer, "test-fingerprint")
 	if err != nil {
 		t.Fatalf("encodeAndSign failed: %v", err)
 	}
@@ -529,10 +493,7 @@ func TestVerifyContext_PublicFunction(t *testing.T) {
 
 func TestCheckCompatibility(t *testing.T) {
 	// Setup test key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 	publicKey := &privateKey.PublicKey
 
 	// Helper to create tokens
@@ -546,7 +507,7 @@ func TestCheckCompatibility(t *testing.T) {
 			Issuer:      "test-issuer",
 			ContextID:   "test-" + id,
 		}
-		ctx, err := encodeAndSign(data, privateKey, "test-fp")
+		ctx, err := encodeAndSign(data, signer, "test-fp")
 		if err != nil {
 			t.Fatalf("Failed to create token: %v", err)
 		}
@@ -679,10 +640,7 @@ func TestCheckCompatibility(t *testing.T) {
 
 func TestCheckCompatibility_ExpiredTokens(t *testing.T) {
 	// Setup test key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
+	privateKey, signer := generateTestECDSAKey(t)
 	publicKey := &privateKey.PublicKey
 
 	// Create expired token
@@ -695,7 +653,7 @@ func TestCheckCompatibility_ExpiredTokens(t *testing.T) {
 		Issuer:      "test-issuer",
 		ContextID:   "expired-token",
 	}
-	expiredToken, err := encodeAndSign(expiredData, privateKey, "test-fp")
+	expiredToken, err := encodeAndSign(expiredData, signer, "test-fp")
 	if err != nil {
 		t.Fatalf("Failed to create expired token: %v", err)
 	}
@@ -710,7 +668,7 @@ func TestCheckCompatibility_ExpiredTokens(t *testing.T) {
 		Issuer:      "test-issuer",
 		ContextID:   "valid-token",
 	}
-	validToken, err := encodeAndSign(validData, privateKey, "test-fp")
+	validToken, err := encodeAndSign(validData, signer, "test-fp")
 	if err != nil {
 		t.Fatalf("Failed to create valid token: %v", err)
 	}

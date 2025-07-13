@@ -1,6 +1,6 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /build
-COPY ../../.. /build
+COPY . /build
 RUN cd demo/services/payment-service && go build -o payment-service . && ls -la payment-service
 
 FROM alpine:latest

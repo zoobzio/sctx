@@ -108,6 +108,7 @@ func createTestConfig(adminIdentity string) ContextServiceConfig {
 	return ContextServiceConfig{
 		CAPool:        caPool,
 		PrivateKey:    privateKey,
+		Algorithm:     CryptoECDSAP256,
 		Registry:      createTestRegistry(),
 		IssuerName:    "test-issuer",
 		ContextTTL:    15 * time.Minute,
@@ -505,9 +506,7 @@ func TestGetPublicKey(t *testing.T) {
 		}
 
 		// Verify it's a P-256 key
-		if pubKey.Curve != elliptic.P256() {
-			t.Error("Public key should use P-256 curve")
-		}
+		_ = assertECDSAPublicKey(t, pubKey)
 	})
 }
 

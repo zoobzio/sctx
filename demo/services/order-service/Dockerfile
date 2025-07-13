@@ -1,6 +1,6 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /build
-COPY ../../.. /build
+COPY . /build
 RUN cd demo/services/order-service && go build -o order-service . && ls -la order-service
 
 FROM alpine:latest

@@ -91,8 +91,7 @@ func (sp *SecurityProcessor[M]) RegistryLookup() PipelineProcessor[M] {
 
 // FactoryMatcher checks if any active factory matches the certificate.
 // This provides dynamic authorization based on certificate patterns.
-// Note: This processor requires factories to be passed in since they're not
-// accessible through the operations interface for security reasons.
+// Note: Admin explicitly provides which factories this processor can use.
 func (sp *SecurityProcessor[M]) FactoryMatcher(factories []*ContextFactory) PipelineProcessor[M] {
 	return func(req *ContextRequest[M]) (*ContextRequest[M], error) {
 		// Skip if already has authorization source

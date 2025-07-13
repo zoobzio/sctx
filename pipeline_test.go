@@ -89,6 +89,7 @@ func TestPipelineProcessors(t *testing.T) {
 	config := ContextServiceConfig{
 		CAPool:        x509.NewCertPool(),
 		PrivateKey:    privateKey,
+		Algorithm:     CryptoECDSAP256,
 		Registry:      newMockRegistry(),
 		IssuerName:    "Test Issuer",
 		ContextTTL:    15 * time.Minute,

@@ -1,12 +1,12 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
+	"crypto"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -31,11 +31,22 @@ var (
 	contextService *sctx.ContextService[DemoMetadata]
 	serviceAdmin   *sctx.ServiceAdmin[DemoMetadata]
 	caPool         *x509.CertPool
-	privateKey     *ecdsa.PrivateKey
+	privateKey     crypto.PrivateKey
+	rateLimiter    *SimpleRateLimiter
+	
+	// Command line flags
+	useEd25519 = flag.Bool("ed25519", false, "Use Ed25519 for high performance (default: ECDSA P-256 for FIPS compliance)")
 )
 
 func main() {
+	flag.Parse()
+	
 	log.Println("=== SCTX Security Demo ===")
+	if *useEd25519 {
+		log.Println("Mode: High Performance (Ed25519)")
+	} else {
+		log.Println("Mode: FIPS Compliant (ECDSA P-256)")
+	}
 	
 	// Load certificates and keys
 	if err := loadCertificates(); err != nil {
@@ -47,9 +58,10 @@ func main() {
 		log.Fatalf("Failed to bootstrap service: %v", err)
 	}
 
-	// Export public key for services to use
-	exportPrivateKey()
-	log.Println("✓ Exported signing keys for service verification")
+	// Initialize rate limiter (5 requests per minute)
+	rateLimiter = NewSimpleRateLimiter(5, time.Minute)
+
+	// Keys are pre-generated and mounted, no need to export
 
 	// Start the servers
 	go startHealthServer()
@@ -71,23 +83,60 @@ func loadCertificates() error {
 		return fmt.Errorf("failed to parse CA cert")
 	}
 	
-	// Generate ECDSA P-256 private key for signing contexts
-	privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return fmt.Errorf("failed to generate private key: %w", err)
+	// Load private key based on selected algorithm
+	if *useEd25519 {
+		// Ed25519 for high performance
+		keyData, err := os.ReadFile("/app/keys/demo-signing-key-ed25519.pem")
+		if err != nil {
+			return fmt.Errorf("failed to read Ed25519 key: %w", err)
+		}
+		block, _ := pem.Decode(keyData)
+		if block == nil {
+			return fmt.Errorf("failed to parse Ed25519 PEM block")
+		}
+		ed25519PrivKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse Ed25519 key: %w", err)
+		}
+		privateKey = ed25519PrivKey.(ed25519.PrivateKey)
+		log.Println("✓ Loaded Ed25519 signing key (High Performance)")
+	} else {
+		// ECDSA P-256 for FIPS compliance
+		keyData, err := os.ReadFile("/app/keys/demo-signing-key-ecdsa.pem")
+		if err != nil {
+			return fmt.Errorf("failed to read ECDSA key: %w", err)
+		}
+		block, _ := pem.Decode(keyData)
+		if block == nil {
+			return fmt.Errorf("failed to parse ECDSA PEM block")
+		}
+		privKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse ECDSA key: %w", err)
+		}
+		privateKey = privKey
+		log.Println("✓ Loaded P-256 signing key (FIPS compliant)")
 	}
 	
 	log.Println("✓ Loaded CA certificate")
-	log.Println("✓ Generated P-256 signing key")
 	return nil
 }
 
 func bootstrapService() error {
 	log.Println("\n=== Bootstrapping SCTX Service ===")
 	
+	// Choose algorithm based on flag
+	var algorithm sctx.CryptoAlgorithm
+	if *useEd25519 {
+		algorithm = sctx.CryptoEd25519
+	} else {
+		algorithm = sctx.CryptoECDSAP256
+	}
+	
 	config := sctx.ContextServiceConfig{
 		CAPool:        caPool,
 		PrivateKey:    privateKey,
+		Algorithm:     algorithm,
 		Registry:      createMemoryRegistry(),
 		IssuerName:    "sctx-demo",
 		ContextTTL:    30 * time.Second, // Short TTL for demo
@@ -96,6 +145,7 @@ func bootstrapService() error {
 	
 	log.Printf("Admin identity: %s", config.AdminIdentity)
 	log.Printf("Context TTL: %s", config.ContextTTL)
+	log.Printf("Crypto algorithm: %s", config.Algorithm)
 	
 	// Create demo metadata template
 	metadata := DemoMetadata{
@@ -125,6 +175,11 @@ func setupInitialConfiguration() error {
 	log.Println("Registering known identities...")
 	
 	entries := map[string]sctx.RegistryEntry{
+		// Admin identity for application-level admin access
+		"sctx-admin": {
+			Type:        "admin",
+			Permissions: []string{"admin:all", "api:admin", "system:manage", "sctx:bootstrap", "sctx:register", "sctx:factory"},
+		},
 		// Microservices for realistic demo
 		"order-service": {
 			Type:        "service",
@@ -147,6 +202,15 @@ func setupInitialConfiguration() error {
 			Type:        "gateway",
 			Permissions: []string{"api:read", "api:write", "api:admin"},
 		},
+		// Test certificates for demo scenarios
+		"rate-limit-test": {
+			Type:        "test",
+			Permissions: []string{"api:read"},
+		},
+		"refresh-test-client": {
+			Type:        "test", 
+			Permissions: []string{"api:read"},
+		},
 	}
 	
 	for identity, entry := range entries {
@@ -159,35 +223,35 @@ func setupInitialConfiguration() error {
 	// Register context factories for pattern matching
 	log.Println("\nRegistering context factories...")
 	
-	// Create factories using the constructor
+	// Register development environment factory
 	devFactory, err := sctx.NewContextFactory("dev-environment", "CN", `^dev\.(.+)\.local$`, "development", []string{"dev:debug", "dev:logs"}, 0)
 	if err != nil {
 		return fmt.Errorf("failed to create dev factory: %w", err)
 	}
-	devFactory.AllowRefresh = true
-	devFactory.MaxRefreshes = intPtr(10)
+	if err := serviceAdmin.RegisterFactory(devFactory); err != nil {
+		return fmt.Errorf("failed to register dev factory: %w", err)
+	}
+	log.Printf("✓ Registered factory: dev-environment (pattern: %s)", devFactory.MatchPattern)
 	
+	// Register production environment factory
 	prodFactory, err := sctx.NewContextFactory("prod-environment", "CN", `^prod\.(.+)\.local$`, "production", []string{"prod:read"}, 0)
 	if err != nil {
 		return fmt.Errorf("failed to create prod factory: %w", err)
 	}
-	prodFactory.AllowRefresh = true
-	prodFactory.MaxRefreshes = intPtr(2)
+	if err := serviceAdmin.RegisterFactory(prodFactory); err != nil {
+		return fmt.Errorf("failed to register prod factory: %w", err)
+	}
+	log.Printf("✓ Registered factory: prod-environment (pattern: %s)", prodFactory.MatchPattern)
 	
+	// Register team services factory
 	teamFactory, err := sctx.NewContextFactory("team-services", "CN", `\.(team-[^.]+)\.local$`, "team", []string{"team:collaborate"}, 0)
 	if err != nil {
 		return fmt.Errorf("failed to create team factory: %w", err)
 	}
-	teamFactory.AllowRefresh = false
-	
-	factories := []*sctx.ContextFactory{devFactory, prodFactory, teamFactory}
-	
-	for _, factory := range factories {
-		if err := serviceAdmin.RegisterFactory(factory); err != nil {
-			return fmt.Errorf("failed to register factory %s: %w", factory.ID, err)
-		}
-		log.Printf("✓ Registered factory: %s (pattern: %s)", factory.ID, factory.MatchPattern)
+	if err := serviceAdmin.RegisterFactory(teamFactory); err != nil {
+		return fmt.Errorf("failed to register team factory: %w", err)
 	}
+	log.Printf("✓ Registered factory: team-services (pattern: %s)", teamFactory.MatchPattern)
 	
 	// Lock factory registration
 	log.Println("\nLocking factory registration...")
@@ -332,6 +396,13 @@ func startHealthServer() {
 func handleContextRequest(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		http.Error(w, "No client certificate provided", http.StatusUnauthorized)
+		return
+	}
+	
+	// Check rate limit
+	identity := r.TLS.PeerCertificates[0].Subject.CommonName
+	if !rateLimiter.Allow(identity) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 	
@@ -527,9 +598,6 @@ func requireAdmin(next http.Handler) http.Handler {
 	})
 }
 
-func intPtr(i int) *int {
-	return &i
-}
 
 // createMemoryRegistry creates a registry for demo purposes
 func createMemoryRegistry() sctx.Registry {
@@ -543,10 +611,30 @@ func setupProcessors() error {
 	// Create basic processors for demo
 	securityProcessor := sctx.NewSecurityProcessor[DemoMetadata](ops)
 	
-	// Register minimal pipeline for registry-based authentication
+	// Admin explicitly provides which factories the processor can use
+	// This preserves the admin-only access to factory information
+	factories, err := serviceAdmin.ListFactories()
+	if err != nil {
+		return fmt.Errorf("failed to get factories: %w", err)
+	}
+	
+	// Convert FactoryInfo to ContextFactory (this is a limitation of the current API)
+	var activeFactories []*sctx.ContextFactory
+	for _, info := range factories {
+		// Admin decides which factories to expose to processors
+		factory, err := sctx.NewContextFactory(info.ID, info.MatchField, info.MatchPattern, info.ContextType, []string{}, 0)
+		if err != nil {
+			continue
+		}
+		factory.Enabled = info.Enabled
+		activeFactories = append(activeFactories, factory)
+	}
+	
+	// Register pipeline with both registry and factory support
 	serviceAdmin.Register(
 		securityProcessor.CertificateValidator(),
 		securityProcessor.RegistryLookup(),
+		securityProcessor.FactoryMatcher(activeFactories),
 		securityProcessor.DefaultDeny(),
 	)
 	
@@ -555,24 +643,3 @@ func setupProcessors() error {
 }
 
 
-// Helper to export private key for debugging
-func exportPrivateKey() {
-	derBytes, _ := x509.MarshalECPrivateKey(privateKey)
-	pemBlock := &pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: derBytes,
-	}
-	pemBytes := pem.EncodeToMemory(pemBlock)
-	
-	os.WriteFile("demo-signing-key.pem", pemBytes, 0600)
-	
-	// Also export public key
-	derPubBytes, _ := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
-	pemPubBlock := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: derPubBytes,
-	}
-	pemPubBytes := pem.EncodeToMemory(pemPubBlock)
-	
-	os.WriteFile("demo-signing-public.pem", pemPubBytes, 0644)
-}

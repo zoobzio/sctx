@@ -1,7 +1,7 @@
 package sctx
 
 import (
-	"crypto/ecdsa"
+	"crypto"
 	"errors"
 	"strings"
 	"sync"
@@ -10,15 +10,6 @@ import (
 	"github.com/zoobzio/pipz"
 )
 
-// hasPermission checks if a permission list contains a specific permission or admin wildcard
-func hasPermission(permissions []string, required string) bool {
-	for _, perm := range permissions {
-		if perm == required || perm == PermissionAdminAll {
-			return true
-		}
-	}
-	return false
-}
 
 var (
 	ErrNotAdmin            = errors.New("invalid admin credentials")
@@ -276,7 +267,7 @@ type ServiceMetrics struct {
 
 // GetPublicKey returns the service's public key for verification
 // This is an admin-only operation
-func (a *ServiceAdmin[M]) GetPublicKey() *ecdsa.PublicKey {
+func (a *ServiceAdmin[M]) GetPublicKey() crypto.PublicKey {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

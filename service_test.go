@@ -290,6 +290,10 @@ func createTestService(t *testing.T, config ContextServiceConfig) *ContextServic
 			t.Fatalf("Failed to generate key: %v", err)
 		}
 		config.PrivateKey = key
+		// Default to ECDSA for tests since we're generating an ECDSA key
+		if config.Algorithm == "" {
+			config.Algorithm = CryptoECDSAP256
+		}
 	}
 
 	if config.CAPool == nil {
@@ -357,6 +361,7 @@ func TestNewContextService(t *testing.T) {
 		config := ContextServiceConfig{
 			CAPool:     x509.NewCertPool(),
 			PrivateKey: key,
+			Algorithm:  CryptoECDSAP256,
 			Registry:   newMockRegistry(),
 			IssuerName: "test-issuer",
 			ContextTTL: 10 * time.Minute,
@@ -379,6 +384,7 @@ func TestNewContextService(t *testing.T) {
 		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		config := ContextServiceConfig{
 			PrivateKey: key,
+			Algorithm:  CryptoECDSAP256,
 			Registry:   newMockRegistry(),
 		}
 
@@ -405,6 +411,7 @@ func TestNewContextService(t *testing.T) {
 		config := ContextServiceConfig{
 			CAPool:     x509.NewCertPool(),
 			PrivateKey: key,
+			Algorithm:  CryptoECDSAP256,
 		}
 
 		_, err := newContextService(config, createTestMetadata())
@@ -419,6 +426,7 @@ func TestNewContextService(t *testing.T) {
 		config := ContextServiceConfig{
 			CAPool:     x509.NewCertPool(),
 			PrivateKey: key,
+			Algorithm:  CryptoECDSAP256,
 			Registry:   newMockRegistry(),
 		}
 
@@ -433,6 +441,7 @@ func TestNewContextService(t *testing.T) {
 		config := ContextServiceConfig{
 			CAPool:     x509.NewCertPool(),
 			PrivateKey: key,
+			Algorithm:  CryptoECDSAP256,
 			Registry:   newMockRegistry(),
 			// No TTL specified
 		}
@@ -456,6 +465,7 @@ func TestRequestContext_NoCertificate(t *testing.T) {
 	resetBootstrapForTesting()
 	config := ContextServiceConfig{
 		PrivateKey:    generateTestKey(t),
+		Algorithm:     CryptoECDSAP256,
 		CAPool:        x509.NewCertPool(),
 		Registry:      newMockRegistry(),
 		AdminIdentity: "test-admin",
@@ -643,7 +653,7 @@ func TestRequestContext_AdminBootstrap(t *testing.T) {
 	}
 
 	// Verify admin permissions
-	data, err := VerifyContext(token1.Context(), &svc.issuer.(*defaultContextIssuer).privateKey.PublicKey)
+	data, err := VerifyContext(token1.Context(), svc.issuer.GetPublicKey())
 	if err != nil {
 		t.Fatalf("Failed to verify context: %v", err)
 	}
@@ -683,7 +693,7 @@ func TestRequestContext_AdminBootstrap(t *testing.T) {
 		t.Fatalf("Second admin request failed: %v", err)
 	}
 
-	data2, _ := VerifyContext(token2.Context(), &svc.issuer.(*defaultContextIssuer).privateKey.PublicKey)
+	data2, _ := VerifyContext(token2.Context(), svc.issuer.GetPublicKey())
 	if len(data2.Permissions) != 1 || data2.Permissions[0] != "normal:permission" {
 		t.Error("Second request should use registry permissions")
 	}
@@ -715,7 +725,7 @@ func TestRequestContext_RegistryLookup(t *testing.T) {
 	}
 
 	// Verify permissions from registry
-	data, _ := VerifyContext(token.Context(), &svc.issuer.(*defaultContextIssuer).privateKey.PublicKey)
+	data, _ := VerifyContext(token.Context(), svc.issuer.GetPublicKey())
 	if len(data.Permissions) != 2 {
 		t.Errorf("Expected 2 permissions, got %d", len(data.Permissions))
 	}
@@ -763,7 +773,7 @@ func TestRequestContext_FactoryMatch(t *testing.T) {
 	}
 
 	// Verify factory-generated context
-	data, _ := VerifyContext(token.Context(), &svc.issuer.(*defaultContextIssuer).privateKey.PublicKey)
+	data, _ := VerifyContext(token.Context(), svc.issuer.GetPublicKey())
 	if data.Type != "worker" {
 		t.Errorf("Expected type 'worker', got %s", data.Type)
 	}
@@ -1124,7 +1134,7 @@ func TestConcurrentRequests(t *testing.T) {
 				}
 
 				// Verify token
-				data, err := VerifyContext(token.Context(), &svc.issuer.(*defaultContextIssuer).privateKey.PublicKey)
+				data, err := VerifyContext(token.Context(), svc.issuer.GetPublicKey())
 				if err != nil {
 					errors <- err
 					return

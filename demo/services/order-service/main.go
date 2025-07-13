@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	// "github.com/zoobzio/sctx" // Commented out for demo simplicity
@@ -19,7 +20,7 @@ func main() {
 	log.Println("=== Order Service Starting ===")
 
 	// Load public key for token verification
-	publicKey, err := loadPublicKey()
+	publicKey, err := getSCTXPublicKey()
 	if err != nil {
 		log.Fatalf("Failed to load public key: %v", err)
 	}
@@ -105,6 +106,7 @@ func handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 
 	response := "Order placed successfully!\n"
 	response += "✓ Payment processed\n"
+	response += "✓ Permission compatibility verified\n"
 	response += "Order ID: ord_" + fmt.Sprintf("%d", time.Now().Unix()) + "\n"
 
 	w.Write([]byte(response))
@@ -204,12 +206,15 @@ func getServiceToken() (string, error) {
 
 	// Extract token from "Context: <token>" line
 	// In real implementation, would parse properly
-	lines := string(body)
-	if len(lines) > 100 {
-		return lines[9:109], nil // Rough extraction for demo
+	response := string(body)
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Context: ") {
+			return strings.TrimSpace(line[9:]), nil
+		}
 	}
 
-	return "", fmt.Errorf("could not extract token from response")
+	return "", fmt.Errorf("could not extract token from response: %s", response)
 }
 
 func getSCTXPublicKey() (*ecdsa.PublicKey, error) {
@@ -217,7 +222,7 @@ func getSCTXPublicKey() (*ecdsa.PublicKey, error) {
 	// For demo purposes, we'll read it from the file written by the demo server
 	
 	// Try to read the public key file that the demo server writes
-	keyData, err := os.ReadFile("/app/demo-signing-public.pem")
+	keyData, err := os.ReadFile("/app/keys/demo-signing-public-ecdsa.pem")
 	if err != nil {
 		// Fallback: try to get it from a shared volume or well-known location
 		// For demo, we'll use a hardcoded approach since we know the server exports it

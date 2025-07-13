@@ -52,7 +52,7 @@ echo -e "${BLUE}=== Test 2: Direct Service Access ===${NC}"
 
 # Test order service endpoints
 echo "Testing order service endpoints..."
-result=$(curl -s -k https://order-service:8080/orders)
+result=$(curl -s -k -H "X-Context-Token: $ORDER_TOKEN" https://order-service:8080/orders)
 if [[ "$result" == *"Orders from Order Service"* ]]; then
     echo -e "${GREEN}✓ Order service responding${NC}"
 else
@@ -75,7 +75,7 @@ echo -e "${BLUE}=== Test 3: Service-to-Service Communication ===${NC}"
 
 # Test order placement flow (order -> payment)
 echo "Testing complete order placement flow..."
-result=$(curl -s -k -X POST https://order-service:8080/orders/place)
+result=$(curl -s -k -X POST -H "X-Context-Token: $ORDER_TOKEN" https://order-service:8080/orders/place)
 if [[ "$result" == *"Order placed successfully"* ]]; then
     echo -e "${GREEN}✓ Order placement flow completed${NC}"
     echo "  Response: $(echo "$result" | head -1)"
@@ -90,7 +90,7 @@ echo -e "${BLUE}=== Test 4: Permission Compatibility Verification ===${NC}"
 
 # Test order placement with compatibility check
 echo "Testing order placement with permission compatibility verification..."
-result=$(curl -s -k -X POST https://order-service:8080/orders/place)
+result=$(curl -s -k -X POST -H "X-Context-Token: $ORDER_TOKEN" https://order-service:8080/orders/place)
 if [[ "$result" == *"Permission compatibility verified"* ]]; then
     echo -e "${GREEN}✓ Permission compatibility verification successful${NC}"
     echo "  Order service verified it can delegate to payment service"

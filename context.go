@@ -1,15 +1,11 @@
 package sctx
 
 import (
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/asn1"
+	"crypto"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
 	"time"
 )
@@ -58,14 +54,9 @@ type signedPayload struct {
 	Signature string `json:"signature"` // Base64 encoded signature
 }
 
-// ecdsaSignature represents an ECDSA signature for ASN.1 encoding
-type ecdsaSignature struct {
-	R *big.Int
-	S *big.Int
-}
 
-// encodeAndSign creates a signed context token using ECDSA P-256
-func encodeAndSign(data *ContextData, privateKey *ecdsa.PrivateKey, certificateFingerprint string) (Context, error) {
+// encodeAndSign creates a signed context token using the configured crypto algorithm
+func encodeAndSign(data *ContextData, signer CryptoSigner, certificateFingerprint string) (Context, error) {
 	// Include fingerprint in the signed data
 	data.CertificateFingerprint = certificateFingerprint
 
@@ -75,18 +66,10 @@ func encodeAndSign(data *ContextData, privateKey *ecdsa.PrivateKey, certificateF
 		return "", fmt.Errorf("failed to marshal context data: %w", err)
 	}
 
-	// Sign the data with ECDSA
-	hash := sha256.Sum256(dataBytes)
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hash[:])
+	// Sign the data using the configured algorithm
+	signatureBytes, err := signer.Sign(dataBytes)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign context: %w", err)
-	}
-
-	// Encode signature using ASN.1 DER format (standard for ECDSA)
-	sig := ecdsaSignature{R: r, S: s}
-	signatureBytes, err := asn1.Marshal(sig)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal signature: %w", err)
 	}
 
 	// Create the signed payload
@@ -105,8 +88,8 @@ func encodeAndSign(data *ContextData, privateKey *ecdsa.PrivateKey, certificateF
 	return Context(base64.URLEncoding.EncodeToString(payloadBytes)), nil
 }
 
-// decodeAndVerify extracts and verifies context data using ECDSA P-256
-func decodeAndVerify(ctx Context, publicKey *ecdsa.PublicKey) (*ContextData, error) {
+// decodeAndVerify extracts and verifies context data using the detected algorithm
+func decodeAndVerify(ctx Context, publicKey crypto.PublicKey) (*ContextData, error) {
 	// Decode the outer payload
 	payloadBytes, err := base64.URLEncoding.DecodeString(string(ctx))
 	if err != nil {
@@ -130,15 +113,25 @@ func decodeAndVerify(ctx Context, publicKey *ecdsa.PublicKey) (*ContextData, err
 		return nil, ErrInvalidContext
 	}
 
-	// Decode ECDSA signature
-	var sig ecdsaSignature
-	if _, err := asn1.Unmarshal(signatureBytes, &sig); err != nil {
+	// Detect algorithm from public key and create appropriate verifier
+	algorithm, err := DetectAlgorithmFromPublicKey(publicKey)
+	if err != nil {
+		return nil, ErrInvalidSignature
+	}
+	
+	// Create verifier (we don't need the private key for verification)
+	var signer CryptoSigner
+	switch algorithm {
+	case CryptoEd25519:
+		signer = &ed25519Signer{} // Only used for verification
+	case CryptoECDSAP256:
+		signer = &ecdsaP256Signer{} // Only used for verification
+	default:
 		return nil, ErrInvalidSignature
 	}
 
-	// Verify the signature
-	hash := sha256.Sum256(dataBytes)
-	if !ecdsa.Verify(publicKey, hash[:], sig.R, sig.S) {
+	// Verify the signature using the detected algorithm
+	if !signer.Verify(dataBytes, signatureBytes, publicKey) {
 		return nil, ErrInvalidSignature
 	}
 
@@ -168,7 +161,7 @@ func decodeAndVerify(ctx Context, publicKey *ecdsa.PublicKey) (*ContextData, err
 // - Service delegation: "Can this upstream service ask me to perform this operation?"
 // - Proxy/Gateway: "Should I forward this request based on both tokens?"
 // - Workflow orchestration: "Can service A tell service B to do X?"
-func CheckCompatibility(callerToken, subjectToken Context, publicKey *ecdsa.PublicKey) (bool, error) {
+func CheckCompatibility(callerToken, subjectToken Context, publicKey crypto.PublicKey) (bool, error) {
 	// Verify caller token
 	callerData, err := VerifyContext(callerToken, publicKey)
 	if err != nil {

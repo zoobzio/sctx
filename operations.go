@@ -93,13 +93,3 @@ type SecurityEvent struct {
 	RemoteAddr  string
 }
 
-// ProcessorPermissions defines the permission strings processors need
-const (
-	PermissionTokenRevoke    = "sctx:token:revoke"
-	PermissionTokenInfo      = "sctx:token:info"
-	PermissionSecurityAlert  = "sctx:security:alert"
-	PermissionSecurityBlock  = "sctx:security:blacklist"
-	PermissionRegistryLookup = "sctx:registry:lookup"
-	PermissionMetricsWrite   = "sctx:metrics:write"
-	PermissionAdminAll       = "sctx:admin"
-)

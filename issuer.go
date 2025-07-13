@@ -1,8 +1,7 @@
 package sctx
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -17,30 +16,32 @@ type ContextIssuer interface {
 	GenerateContextID() string
 
 	// GetPublicKey returns the public key for verification
-	GetPublicKey() *ecdsa.PublicKey
+	GetPublicKey() crypto.PublicKey
+	
+	// GetAlgorithm returns the cryptographic algorithm used
+	GetAlgorithm() CryptoAlgorithm
 }
 
-// defaultContextIssuer is the standard implementation using ECDSA P-256
+// defaultContextIssuer is the algorithm-agnostic implementation
 type defaultContextIssuer struct {
-	privateKey *ecdsa.PrivateKey
-	publicKey  *ecdsa.PublicKey
+	signer     CryptoSigner
 	issuerName string
 }
 
-// newContextIssuer creates a new context issuer with the provided private key (private)
-func newContextIssuer(privateKey *ecdsa.PrivateKey, issuerName string) (ContextIssuer, error) {
+// newContextIssuer creates a new context issuer with the provided private key and algorithm
+func newContextIssuer(privateKey crypto.PrivateKey, algorithm CryptoAlgorithm, issuerName string) (ContextIssuer, error) {
 	if privateKey == nil {
 		return nil, errors.New("private key is required")
 	}
 
-	// Validate key is P-256 for NIST compliance
-	if privateKey.Curve != elliptic.P256() {
-		return nil, errors.New("private key must use P-256 curve for NIST compliance")
+	// Create appropriate signer for the algorithm
+	signer, err := NewCryptoSigner(algorithm, privateKey)
+	if err != nil {
+		return nil, err
 	}
 
 	return &defaultContextIssuer{
-		privateKey: privateKey,
-		publicKey:  &privateKey.PublicKey,
+		signer:     signer,
 		issuerName: issuerName,
 	}, nil
 }
@@ -61,8 +62,8 @@ func (i *defaultContextIssuer) IssueContext(data *ContextData, certificateFinger
 		data.ContextID = i.GenerateContextID()
 	}
 
-	// Sign the context
-	return encodeAndSign(data, i.privateKey, certificateFingerprint)
+	// Sign the context using the configured algorithm
+	return encodeAndSign(data, i.signer, certificateFingerprint)
 }
 
 // GenerateContextID creates a unique identifier for a context
@@ -75,6 +76,11 @@ func (i *defaultContextIssuer) GenerateContextID() string {
 }
 
 // GetPublicKey returns the public key for verification
-func (i *defaultContextIssuer) GetPublicKey() *ecdsa.PublicKey {
-	return i.publicKey
+func (i *defaultContextIssuer) GetPublicKey() crypto.PublicKey {
+	return i.signer.PublicKey()
+}
+
+// GetAlgorithm returns the cryptographic algorithm used
+func (i *defaultContextIssuer) GetAlgorithm() CryptoAlgorithm {
+	return i.signer.Algorithm()
 }

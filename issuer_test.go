@@ -51,12 +51,13 @@ func TestNewContextIssuer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			issuer, err := newContextIssuer(tt.privateKey, tt.issuerName)
+			issuer, err := newContextIssuer(tt.privateKey, CryptoECDSAP256, tt.issuerName)
 
 			if tt.wantErr {
 				if err == nil {
 					t.Error("Expected error, got nil")
 				} else if tt.errMsg != "" && err.Error() != tt.errMsg {
+					t.Logf("Private key value: %v (type: %T)", tt.privateKey, tt.privateKey)
 					t.Errorf("Expected error %q, got %q", tt.errMsg, err.Error())
 				}
 				return
@@ -94,7 +95,7 @@ func TestNewContextIssuer_InvalidCurve(t *testing.T) {
 		t.Fatalf("Failed to generate P-384 key: %v", err)
 	}
 
-	issuer, err := newContextIssuer(invalidKey, "test-issuer")
+	issuer, err := newContextIssuer(invalidKey, CryptoECDSAP256, "test-issuer")
 	if err == nil {
 		t.Error("Expected error for non-P-256 key")
 	}
@@ -103,7 +104,7 @@ func TestNewContextIssuer_InvalidCurve(t *testing.T) {
 		t.Error("Expected nil issuer for invalid key")
 	}
 
-	expectedErr := "private key must use P-256 curve for NIST compliance"
+	expectedErr := "ECDSA private key must use P-256 curve for NIST compliance"
 	if err.Error() != expectedErr {
 		t.Errorf("Expected error %q, got %q", expectedErr, err.Error())
 	}
@@ -111,7 +112,7 @@ func TestNewContextIssuer_InvalidCurve(t *testing.T) {
 
 func TestContextIssuer_GenerateContextID(t *testing.T) {
 	key := createTestIssuerKey(t)
-	issuer, err := newContextIssuer(key, "test-issuer")
+	issuer, err := newContextIssuer(key, CryptoECDSAP256, "test-issuer")
 	if err != nil {
 		t.Fatalf("Failed to create issuer: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestContextIssuer_GenerateContextID(t *testing.T) {
 func TestContextIssuer_IssueContext(t *testing.T) {
 	key := createTestIssuerKey(t)
 	issuerName := "test-issuer"
-	issuer, err := newContextIssuer(key, issuerName)
+	issuer, err := newContextIssuer(key, CryptoECDSAP256, issuerName)
 	if err != nil {
 		t.Fatalf("Failed to create issuer: %v", err)
 	}
@@ -299,7 +300,7 @@ func TestContextIssuer_IssueContext(t *testing.T) {
 
 func TestContextIssuer_GetPublicKey(t *testing.T) {
 	key := createTestIssuerKey(t)
-	issuer, err := newContextIssuer(key, "test-issuer")
+	issuer, err := newContextIssuer(key, CryptoECDSAP256, "test-issuer")
 	if err != nil {
 		t.Fatalf("Failed to create issuer: %v", err)
 	}
@@ -315,15 +316,13 @@ func TestContextIssuer_GetPublicKey(t *testing.T) {
 	}
 
 	// Should be P-256
-	if pubKey.Curve != elliptic.P256() {
-		t.Error("Public key should use P-256 curve")
-	}
+	_ = assertECDSAPublicKey(t, pubKey)
 }
 
 func TestContextIssuer_Integration(t *testing.T) {
 	// Test full integration: create issuer, issue context, verify it works with validation
 	key := createTestIssuerKey(t)
-	issuer, err := newContextIssuer(key, "integration-issuer")
+	issuer, err := newContextIssuer(key, CryptoECDSAP256, "integration-issuer")
 	if err != nil {
 		t.Fatalf("Failed to create issuer: %v", err)
 	}
@@ -389,7 +388,7 @@ func TestContextIssuer_Integration(t *testing.T) {
 
 func TestContextIssuer_EdgeCases(t *testing.T) {
 	key := createTestIssuerKey(t)
-	issuer, err := newContextIssuer(key, "edge-case-issuer")
+	issuer, err := newContextIssuer(key, CryptoECDSAP256, "edge-case-issuer")
 	if err != nil {
 		t.Fatalf("Failed to create issuer: %v", err)
 	}
@@ -518,13 +517,13 @@ func TestContextIssuer_EdgeCases(t *testing.T) {
 func TestContextIssuer_MultipleIssuers(t *testing.T) {
 	// Test that contexts from different issuers can't be verified with wrong keys
 	issuer1Key := createTestIssuerKey(t)
-	issuer1, err := newContextIssuer(issuer1Key, "issuer1")
+	issuer1, err := newContextIssuer(issuer1Key, CryptoECDSAP256, "issuer1")
 	if err != nil {
 		t.Fatalf("Failed to create issuer1: %v", err)
 	}
 
 	issuer2Key := createTestIssuerKey(t)
-	issuer2, err := newContextIssuer(issuer2Key, "issuer2")
+	issuer2, err := newContextIssuer(issuer2Key, CryptoECDSAP256, "issuer2")
 	if err != nil {
 		t.Fatalf("Failed to create issuer2: %v", err)
 	}

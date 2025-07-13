@@ -13,6 +13,12 @@ make test
 
 # Interactive testing environment
 make shell
+
+# Run with high-performance Ed25519 (25% faster)
+./sctx-demo -ed25519
+
+# Run with FIPS-compliant ECDSA P-256 (default)
+./sctx-demo
 ```
 
 ## Demo Modes

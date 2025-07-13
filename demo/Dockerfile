@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # Build the demo
-RUN go build -o sctx-demo ./demo/main.go
+RUN cd demo && go build -o sctx-demo .
 
 # Runtime image
 FROM alpine:latest
@@ -25,7 +25,7 @@ RUN apk add --no-cache ca-certificates curl bash
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/sctx-demo .
+COPY --from=builder /build/demo/sctx-demo .
 
 # Copy certificates (will be mounted as volume in docker-compose)
 # COPY demo/certs ./certs
