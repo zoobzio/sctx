@@ -9,9 +9,9 @@ import (
 // It provides a safe container for the opaque context string and metadata
 // without exposing the internal context data.
 type Token struct {
-	value       string        // The opaque context string
-	expiresAt   time.Time    // When the token expires
-	fingerprint string        // Certificate fingerprint that requested this
+	value       string    // The opaque context string
+	expiresAt   time.Time // When the token expires
+	fingerprint string    // Certificate fingerprint that requested this
 	mu          sync.RWMutex
 }
 
@@ -52,7 +52,6 @@ func (t *Token) IsExpired() bool {
 	return time.Now().After(t.expiresAt)
 }
 
-
 // TimeUntilExpiry returns how long until the token expires
 func (t *Token) TimeUntilExpiry() time.Duration {
 	t.mu.RLock()
@@ -74,4 +73,3 @@ func (t *Token) update(ctx Context, expiresAt time.Time) {
 	t.value = string(ctx)
 	t.expiresAt = expiresAt
 }
-

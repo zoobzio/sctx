@@ -14,10 +14,10 @@ import (
 type CertificateValidator interface {
 	// ValidateClientCert validates the client certificate from TLS connection state
 	ValidateClientCert(tlsState *tls.ConnectionState, caPool *x509.CertPool) (*x509.Certificate, error)
-	
+
 	// ExtractIdentity extracts the identity from a certificate
 	ExtractIdentity(cert *x509.Certificate) string
-	
+
 	// GetFingerprint computes the SHA256 fingerprint of a certificate
 	GetFingerprint(cert *x509.Certificate) string
 }
@@ -36,27 +36,27 @@ func (v *defaultCertValidator) ValidateClientCert(tlsState *tls.ConnectionState,
 	if tlsState == nil || len(tlsState.PeerCertificates) == 0 {
 		return nil, ErrNoCertificate
 	}
-	
+
 	// Get the client certificate
 	clientCert := tlsState.PeerCertificates[0]
-	
+
 	// Verify the certificate chain
 	opts := x509.VerifyOptions{
 		Roots:         caPool,
 		Intermediates: x509.NewCertPool(),
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	
+
 	// Add any intermediate certificates
 	for _, cert := range tlsState.PeerCertificates[1:] {
 		opts.Intermediates.AddCert(cert)
 	}
-	
+
 	// Verify the certificate
 	if _, err := clientCert.Verify(opts); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
 	}
-	
+
 	// Additional certificate validation
 	now := time.Now()
 	if now.Before(clientCert.NotBefore) {
@@ -65,7 +65,7 @@ func (v *defaultCertValidator) ValidateClientCert(tlsState *tls.ConnectionState,
 	if now.After(clientCert.NotAfter) {
 		return nil, errors.New("certificate has expired")
 	}
-	
+
 	// Check key usage
 	if clientCert.ExtKeyUsage != nil && len(clientCert.ExtKeyUsage) > 0 {
 		hasClientAuth := false
@@ -79,7 +79,7 @@ func (v *defaultCertValidator) ValidateClientCert(tlsState *tls.ConnectionState,
 			return nil, errors.New("certificate not authorized for client authentication")
 		}
 	}
-	
+
 	return clientCert, nil
 }
 
@@ -90,17 +90,17 @@ func (v *defaultCertValidator) ExtractIdentity(cert *x509.Certificate) string {
 	if cert.Subject.CommonName != "" {
 		return cert.Subject.CommonName
 	}
-	
+
 	// Fall back to first DNS SAN
 	if len(cert.DNSNames) > 0 {
 		return cert.DNSNames[0]
 	}
-	
+
 	// Fall back to first URI SAN
 	if len(cert.URIs) > 0 {
 		return cert.URIs[0].String()
 	}
-	
+
 	// Last resort - use serial number
 	return cert.SerialNumber.String()
 }

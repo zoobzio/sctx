@@ -1,16 +1,34 @@
 # SCTX Security Demo
 
-This demo showcases the security features and edge cases of the SCTX (Security Context) service, demonstrating zero-trust architecture with mTLS certificate-based authentication.
+This demo showcases SCTX (Security Context) service in both comprehensive security testing and realistic microservices architecture, demonstrating zero-trust authentication with mTLS certificates.
 
 ## Quick Start
 
 ```bash
-# Run all security tests automatically
+# Run realistic microservices demo
+make test-microservices
+
+# Run comprehensive security tests
 make test
 
-# Or run the server and test manually
+# Interactive testing environment
 make shell
 ```
+
+## Demo Modes
+
+### 🏗️ Microservices Architecture Demo
+**What it shows**: Real-world service-to-service authentication patterns
+- **Order Service** (`order-service:8081`) - Manages orders, calls payment service  
+- **Payment Service** (`payment-service:8082`) - Processes payments
+- **SCTX Server** (`sctx-demo:8443`) - Issues and validates tokens
+
+**Flow**: Order Service → Gets SCTX token → Calls Payment Service → Validates token
+
+### 🔒 Security Capabilities Demo  
+**What it shows**: Comprehensive security edge cases and attack prevention
+- Admin bootstrap, factory patterns, rate limiting, token refresh
+- 10 different security scenarios with attack/defense validation
 
 ## Architecture Overview
 

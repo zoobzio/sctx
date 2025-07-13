@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git
@@ -31,7 +31,7 @@ COPY --from=builder /build/sctx-demo .
 # COPY demo/certs ./certs
 
 # Expose ports
-EXPOSE 8443 8444
+EXPOSE 8080 8443 8444
 
 # Run the demo
 CMD ["./sctx-demo"]

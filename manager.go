@@ -3,6 +3,7 @@ package sctx
 import (
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -10,19 +11,19 @@ import (
 type FactoryManager interface {
 	// FindBestFactory finds the highest priority factory that matches the certificate
 	FindBestFactory(cert *x509.Certificate) (*ContextFactory, error)
-	
+
 	// RegisterFactory adds a new factory (only allowed before Lock)
 	RegisterFactory(factory *ContextFactory) error
-	
+
 	// GetFactory retrieves a factory by ID
 	GetFactory(id string) (*ContextFactory, bool)
-	
+
 	// Lock prevents any new factories from being registered
 	Lock()
-	
+
 	// IsLocked returns whether factory registration is locked
 	IsLocked() bool
-	
+
 	// ListFactories returns all registered factories
 	ListFactories() []*ContextFactory
 }
@@ -45,15 +46,15 @@ func newFactoryManager() FactoryManager {
 func (m *defaultFactoryManager) FindBestFactory(cert *x509.Certificate) (*ContextFactory, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var bestFactory *ContextFactory
 	bestPriority := -1
-	
+
 	for _, factory := range m.factories {
 		if !factory.IsActive() {
 			continue
 		}
-		
+
 		if matched, _ := factory.Match(cert); matched {
 			if factory.Priority > bestPriority {
 				bestFactory = factory
@@ -61,11 +62,11 @@ func (m *defaultFactoryManager) FindBestFactory(cert *x509.Certificate) (*Contex
 			}
 		}
 	}
-	
+
 	if bestFactory == nil {
 		return nil, errors.New("no matching factory found")
 	}
-	
+
 	return bestFactory, nil
 }
 
@@ -74,34 +75,34 @@ func (m *defaultFactoryManager) RegisterFactory(factory *ContextFactory) error {
 	if factory == nil {
 		return errors.New("factory cannot be nil")
 	}
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if m.locked {
 		return errors.New("factory registration is locked")
 	}
-	
+
 	// Validate factory ID
 	if factory.ID == "" {
 		return errors.New("factory ID is required")
 	}
-	
+
 	// Check for duplicate ID
 	for _, existing := range m.factories {
 		if existing.ID == factory.ID {
 			return errors.New("factory ID already exists")
 		}
 	}
-	
-	// Compile the factory regex
+
+	// Ensure factory regex is compiled (in case it wasn't created via NewContextFactory)
 	if err := factory.Compile(); err != nil {
-		return err
+		return fmt.Errorf("invalid factory pattern: %w", err)
 	}
-	
+
 	// Enable by default
 	factory.Enabled = true
-	
+
 	m.factories = append(m.factories, factory)
 	return nil
 }
@@ -110,13 +111,13 @@ func (m *defaultFactoryManager) RegisterFactory(factory *ContextFactory) error {
 func (m *defaultFactoryManager) GetFactory(id string) (*ContextFactory, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	for _, factory := range m.factories {
 		if factory.ID == id {
 			return factory, true
 		}
 	}
-	
+
 	return nil, false
 }
 
@@ -138,7 +139,7 @@ func (m *defaultFactoryManager) IsLocked() bool {
 func (m *defaultFactoryManager) ListFactories() []*ContextFactory {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// Return a copy to prevent external modification
 	result := make([]*ContextFactory, len(m.factories))
 	copy(result, m.factories)

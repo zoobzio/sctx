@@ -2,6 +2,7 @@ package sctx
 
 import (
 	"crypto/x509"
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
@@ -13,87 +14,126 @@ import (
 //
 // Example Use Cases:
 //
-// 1. Multi-Tenant SaaS Platform
-//    Factory that grants tenant-specific permissions based on organization name:
-//    MatchField: "O", MatchPattern: "^Customer:Acme$"
-//    Permissions: ["tenant:acme:read", "tenant:acme:write"]
-//    Result: O="Customer:Acme" → ["tenant:acme:read", "tenant:acme:write"]
+//  1. Multi-Tenant SaaS Platform
+//     Factory that grants tenant-specific permissions based on organization name:
+//     MatchField: "O", MatchPattern: "^Customer:Acme$"
+//     Permissions: ["tenant:acme:read", "tenant:acme:write"]
+//     Result: O="Customer:Acme" → ["tenant:acme:read", "tenant:acme:write"]
 //
-// 2. Microservice Mesh
-//    Services get permissions based on service type:
-//    MatchField: "CN", MatchPattern: "^svc-auth-.*$"
-//    Permissions: ["service:auth:read", "metrics:write"]
-//    Result: CN="svc-auth-prod" → ["service:auth:read", "metrics:write"]
+//  2. Microservice Mesh
+//     Services get permissions based on service type:
+//     MatchField: "CN", MatchPattern: "^svc-auth-.*$"
+//     Permissions: ["service:auth:read", "metrics:write"]
+//     Result: CN="svc-auth-prod" → ["service:auth:read", "metrics:write"]
 //
-// 3. CI/CD Pipeline
-//    Build agents get fixed permissions:
-//    MatchField: "CN", MatchPattern: "^build-agent-dev$"
-//    Permissions: ["deploy:dev", "secrets:dev:read"]
-//    Result: CN="build-agent-dev" → ["deploy:dev", "secrets:dev:read"]
+//  3. CI/CD Pipeline
+//     Build agents get fixed permissions:
+//     MatchField: "CN", MatchPattern: "^build-agent-dev$"
+//     Permissions: ["deploy:dev", "secrets:dev:read"]
+//     Result: CN="build-agent-dev" → ["deploy:dev", "secrets:dev:read"]
 //
-// 4. IoT Device Fleet
-//    Devices get permissions based on type:
-//    MatchField: "CN", MatchPattern: "^device-sensor-.*$"
-//    Permissions: ["telemetry:write", "config:sensor:read"]
-//    Result: CN="device-sensor-uswest-123" → ["telemetry:write", "config:sensor:read"]
+//  4. IoT Device Fleet
+//     Devices get permissions based on type:
+//     MatchField: "CN", MatchPattern: "^device-sensor-.*$"
+//     Permissions: ["telemetry:write", "config:sensor:read"]
+//     Result: CN="device-sensor-uswest-123" → ["telemetry:write", "config:sensor:read"]
 //
-// 5. Partner API Access
-//    Partners get tier-based permissions:
-//    MatchField: "O", MatchPattern: "^Partner:.*:Tier:Premium$"
-//    Permissions: ["api:premium", "api:ratelimit:1000"]
-//    Result: O="Partner:Stripe:Tier:Premium" → ["api:premium", "api:ratelimit:1000"]
+//  5. Partner API Access
+//     Partners get tier-based permissions:
+//     MatchField: "O", MatchPattern: "^Partner:.*:Tier:Premium$"
+//     Permissions: ["api:premium", "api:ratelimit:1000"]
+//     Result: O="Partner:Stripe:Tier:Premium" → ["api:premium", "api:ratelimit:1000"]
 //
-// 6. Temporary Contractor Access
-//    Contractors get limited permissions:
-//    MatchField: "OU", MatchPattern: "^Contractor-.*$"
-//    Permissions: ["project:read", "docs:read"]
-//    Result: OU="Contractor-2024-03" → ["project:read", "docs:read"]
+//  6. Temporary Contractor Access
+//     Contractors get limited permissions:
+//     MatchField: "OU", MatchPattern: "^Contractor-.*$"
+//     Permissions: ["project:read", "docs:read"]
+//     Result: OU="Contractor-2024-03" → ["project:read", "docs:read"]
 //
-// 7. Geographic Compliance
-//    Location-based permissions for data residency:
-//    MatchField: "C", MatchPattern: "^(DE|FR|IT)$"
-//    Permissions: ["data:eu:*", "gdpr:request"]
-//    Result: C="DE" → ["data:eu:*", "gdpr:request"]
+//  7. Geographic Compliance
+//     Location-based permissions for data residency:
+//     MatchField: "C", MatchPattern: "^(DE|FR|IT)$"
+//     Permissions: ["data:eu:*", "gdpr:request"]
+//     Result: C="DE" → ["data:eu:*", "gdpr:request"]
 type ContextFactory struct {
 	// ID uniquely identifies this factory for management
 	ID string
-	
+
 	// MatchField specifies which certificate field to match against
 	// Common values: "CN" (Common Name), "O" (Organization), "OU" (Organizational Unit),
 	// "C" (Country), "email", "serialNumber"
 	MatchField string
-	
+
 	// MatchPattern is a regular expression pattern to match against the field value
 	MatchPattern string
-	
+
 	// ContextType defines what type of context to create when matched
 	ContextType ContextType
-	
+
 	// Permissions defines the permissions to grant when this factory matches
 	Permissions []string
-	
+
 	// Priority determines which factory wins if multiple match (higher wins)
 	// Default is 0
 	Priority int
-	
+
 	// Lifecycle controls
 	Enabled      bool           // Can be toggled by admin as kill switch
 	ValidFrom    *time.Time     // Optional: when factory becomes active
 	ValidUntil   *time.Time     // Optional: when factory expires
 	MaxTokenTTL  *time.Duration // Optional: override default context TTL
 	MaxIssuances *int           // Optional: limit total tokens issued
-	
+
 	// Refresh controls
-	AllowRefresh   bool  // Whether contexts from this factory can be refreshed
-	MaxRefreshes   *int  // Optional: limit number of times a context can be refreshed
-	
+	AllowRefresh bool // Whether contexts from this factory can be refreshed
+	MaxRefreshes *int // Optional: limit number of times a context can be refreshed
+
 	// Usage tracking
 	IssuedCount int        // Number of contexts issued by this factory
 	LastUsed    *time.Time // When this factory last issued a context
-	
+
 	// Internal fields
 	regex *regexp.Regexp // compiled regex (internal use)
 	mu    sync.Mutex     // protects IssuedCount and LastUsed
+}
+
+
+// NewContextFactory creates a new context factory (admin-only constructor)
+func NewContextFactory(id, matchField, matchPattern string, contextType ContextType, permissions []string, priority int) (*ContextFactory, error) {
+	f := &ContextFactory{
+		ID:           id,
+		MatchField:   matchField,
+		MatchPattern: matchPattern,
+		ContextType:  contextType,
+		Permissions:  permissions,
+		Priority:     priority,
+		Enabled:      true, // Default enabled
+	}
+	
+	// Compile the regex pattern
+	if err := f.Compile(); err != nil {
+		return nil, err
+	}
+	
+	return f, nil
+}
+
+// newTestFactory creates a factory for testing with all options (only for tests)
+func newTestFactory(id, matchField, matchPattern string, contextType ContextType, permissions []string, priority int, enabled bool) *ContextFactory {
+	f := &ContextFactory{
+		ID:           id,
+		MatchField:   matchField,
+		MatchPattern: matchPattern,
+		ContextType:  contextType,
+		Permissions:  permissions,
+		Priority:     priority,
+		Enabled:      enabled,
+	}
+	
+	// Compile the regex pattern (ignore errors in tests)
+	f.Compile()
+	
+	return f
 }
 
 // Compile prepares the factory for use by compiling its regex pattern
@@ -101,12 +141,12 @@ func (f *ContextFactory) Compile() error {
 	if f.MatchPattern == "" {
 		return nil
 	}
-	
+
 	regex, err := regexp.Compile(f.MatchPattern)
 	if err != nil {
 		return err
 	}
-	
+
 	f.regex = regex
 	return nil
 }
@@ -116,12 +156,12 @@ func (f *ContextFactory) Match(cert *x509.Certificate) (bool, []string) {
 	if f.regex == nil {
 		return false, nil
 	}
-	
+
 	fieldValue := extractCertField(cert, f.MatchField)
 	if fieldValue == "" {
 		return false, nil
 	}
-	
+
 	matches := f.regex.FindStringSubmatch(fieldValue)
 	return len(matches) > 0, matches
 }
@@ -132,19 +172,19 @@ func (f *ContextFactory) IsActive() bool {
 	if !f.Enabled {
 		return false
 	}
-	
+
 	now := time.Now()
-	
+
 	// Check ValidFrom
 	if f.ValidFrom != nil && now.Before(*f.ValidFrom) {
 		return false
 	}
-	
+
 	// Check ValidUntil
 	if f.ValidUntil != nil && now.After(*f.ValidUntil) {
 		return false
 	}
-	
+
 	// Check usage limit
 	if f.MaxIssuances != nil {
 		f.mu.Lock()
@@ -153,43 +193,58 @@ func (f *ContextFactory) IsActive() bool {
 			return false
 		}
 	}
-	
+
 	return true
 }
 
-// GenerateContext creates context data from this factory for the given certificate
-func (f *ContextFactory) GenerateContext(cert *x509.Certificate, identity string, defaultTTL time.Duration) *ContextData {
+// generateContext creates context data from this factory for the given certificate (private)
+func (f *ContextFactory) generateContext(cert *x509.Certificate) (*ContextData, time.Duration, error) {
 	matched, _ := f.Match(cert)
 	if !matched {
-		return nil
+		return nil, 0, errors.New("certificate does not match factory pattern")
 	}
-	
+
 	// Check if factory is active
 	if !f.IsActive() {
-		return nil
+		return nil, 0, errors.New("factory is not active")
 	}
-	
+
 	// Update usage tracking
 	f.mu.Lock()
 	f.IssuedCount++
 	now := time.Now()
 	f.LastUsed = &now
 	f.mu.Unlock()
-	
+
 	// Determine TTL
-	ttl := defaultTTL
+	ttl := 15 * time.Minute // default
 	if f.MaxTokenTTL != nil {
 		ttl = *f.MaxTokenTTL
 	}
-	
+
+	// Extract identity from cert
+	identity := ""
+	if cert.Subject.CommonName != "" {
+		identity = cert.Subject.CommonName
+	} else if len(cert.DNSNames) > 0 {
+		identity = cert.DNSNames[0]
+	} else if len(cert.URIs) > 0 {
+		identity = cert.URIs[0].String()
+	} else {
+		identity = cert.Subject.SerialNumber
+	}
+
 	// Return context data with appropriate TTL
-	return &ContextData{
+	data := &ContextData{
 		Type:        f.ContextType,
 		ID:          identity,
 		Permissions: f.Permissions,
 		IssuedAt:    time.Now(),
 		ExpiresAt:   time.Now().Add(ttl),
+		FactoryID:   f.ID,
 	}
+
+	return data, ttl, nil
 }
 
 // extractCertField extracts a specific field value from a certificate
@@ -230,4 +285,3 @@ func extractCertField(cert *x509.Certificate, field string) string {
 	}
 	return ""
 }
-

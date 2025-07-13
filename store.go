@@ -9,13 +9,13 @@ import (
 type TokenStore interface {
 	// Get retrieves an active token by certificate fingerprint
 	Get(fingerprint string) (*activeToken, bool)
-	
+
 	// Set stores or updates an active token
 	Set(fingerprint string, token *activeToken) error
-	
+
 	// Delete removes an active token
 	Delete(fingerprint string) error
-	
+
 	// Start begins the cleanup goroutine
 	Start(shutdown chan struct{}, wg *sync.WaitGroup)
 }
@@ -42,7 +42,7 @@ func newMemoryTokenStore(cleanupInterval time.Duration) TokenStore {
 func (s *memoryTokenStore) Get(fingerprint string) (*activeToken, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	token, exists := s.tokens[fingerprint]
 	return token, exists
 }
@@ -51,7 +51,7 @@ func (s *memoryTokenStore) Get(fingerprint string) (*activeToken, bool) {
 func (s *memoryTokenStore) Set(fingerprint string, token *activeToken) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	s.tokens[fingerprint] = token
 	return nil
 }
@@ -60,7 +60,7 @@ func (s *memoryTokenStore) Set(fingerprint string, token *activeToken) error {
 func (s *memoryTokenStore) Delete(fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	delete(s.tokens, fingerprint)
 	return nil
 }
@@ -78,7 +78,7 @@ func (s *memoryTokenStore) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 func (s *memoryTokenStore) cleanupExpiredTokens(shutdown chan struct{}) {
 	ticker := time.NewTicker(s.cleanupInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-shutdown:

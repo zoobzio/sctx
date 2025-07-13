@@ -64,6 +64,13 @@ minica --domains "refresh-test-client"
 echo "9. Generating certificate with special CN..."
 minica --domains "test-client-123.example"
 
+# Certificates for microservices demo
+echo "10. Generating certificate for order-service..."
+minica --domains "order-service"
+
+echo "11. Generating certificate for payment-service..."
+minica --domains "payment-service"
+
 echo ""
 echo "=== Certificate Summary ==="
 echo "CA Certificate: $(pwd)/minica.pem"

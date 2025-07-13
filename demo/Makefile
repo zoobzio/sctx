@@ -16,41 +16,48 @@ run-local: certs
 # Run everything with Docker Compose
 run:
 	@echo "Starting SCTX demo with Docker Compose..."
-	@docker-compose up --build
+	@docker compose up --build
 
 # Run automated tests
 test:
 	@echo "Running security test scenarios..."
-	@docker-compose up --build --exit-code-from test-runner
+	@docker compose up --build --exit-code-from test-runner
+
+# Run microservices integration tests
+test-microservices:
+	@echo "Running microservices integration tests..."
+	@docker compose --profile test up --build --exit-code-from integration-test
 
 # Run server and open interactive shell
 shell:
 	@echo "Starting services with interactive shell..."
-	@docker-compose --profile interactive up -d
-	@docker-compose exec test-client /bin/sh
+	@docker compose --profile interactive up -d
+	@docker compose exec test-client /bin/sh
 
 # View logs
 logs:
-	@docker-compose logs -f sctx-demo
+	@docker compose logs -f sctx-demo
 
 # Clean up
 clean:
 	@echo "Cleaning up..."
-	@docker-compose down -v
+	@docker compose down -v
 	@rm -rf certs/*
 	@rm -f demo-signing-*.pem
 
 # Show help
 help:
 	@echo "SCTX Demo Makefile targets:"
-	@echo "  make certs      - Generate test certificates using minica"
-	@echo "  make run-local  - Run demo server locally (requires Go)"
-	@echo "  make run        - Run full demo with Docker Compose"
-	@echo "  make test       - Run automated security tests"
-	@echo "  make shell      - Start services and open interactive shell"
-	@echo "  make logs       - View server logs"
-	@echo "  make clean      - Clean up containers and certificates"
+	@echo "  make certs             - Generate test certificates using minica"
+	@echo "  make run-local         - Run demo server locally (requires Go)"
+	@echo "  make run               - Run full demo with Docker Compose"
+	@echo "  make test              - Run automated security tests"
+	@echo "  make test-microservices - Run microservices integration tests"
+	@echo "  make shell             - Start services and open interactive shell"
+	@echo "  make logs              - View server logs"
+	@echo "  make clean             - Clean up containers and certificates"
 	@echo ""
 	@echo "Quick start:"
-	@echo "  make test      # Run all security tests automatically"
-	@echo "  make shell     # Interactive testing environment"
+	@echo "  make test-microservices  # Run realistic microservices demo"
+	@echo "  make test               # Run all security tests"
+	@echo "  make shell              # Interactive testing environment"

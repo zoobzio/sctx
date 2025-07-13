@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/zoobzio/sctx"
@@ -22,9 +21,15 @@ const (
 	adminPort  = ":8444"
 )
 
+// DemoMetadata shows request context metadata
+type DemoMetadata struct {
+	RequestID string `json:"request_id"`
+	ClientIP  string `json:"client_ip"`
+}
+
 var (
-	contextService *sctx.ContextService
-	serviceAdmin   *sctx.ServiceAdmin
+	contextService *sctx.ContextService[DemoMetadata]
+	serviceAdmin   *sctx.ServiceAdmin[DemoMetadata]
 	caPool         *x509.CertPool
 	privateKey     *ecdsa.PrivateKey
 )
@@ -42,7 +47,12 @@ func main() {
 		log.Fatalf("Failed to bootstrap service: %v", err)
 	}
 
+	// Export public key for services to use
+	exportPrivateKey()
+	log.Println("✓ Exported signing keys for service verification")
+
 	// Start the servers
+	go startHealthServer()
 	go startAdminServer()
 	startMainServer()
 }
@@ -82,18 +92,19 @@ func bootstrapService() error {
 		IssuerName:    "sctx-demo",
 		ContextTTL:    30 * time.Second, // Short TTL for demo
 		AdminIdentity: "sctx-admin",
-		
-		// Rate limiting for demo
-		RateLimitRequests: 5,
-		RateLimitWindow:   1 * time.Minute,
 	}
 	
 	log.Printf("Admin identity: %s", config.AdminIdentity)
 	log.Printf("Context TTL: %s", config.ContextTTL)
-	log.Printf("Rate limit: %d requests per %s", config.RateLimitRequests, config.RateLimitWindow)
+	
+	// Create demo metadata template
+	metadata := DemoMetadata{
+		RequestID: "demo-init",
+		ClientIP:  "127.0.0.1",
+	}
 	
 	// Bootstrap the service
-	admin, err := sctx.Bootstrap(config)
+	admin, err := sctx.Bootstrap(config, metadata)
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
@@ -114,6 +125,16 @@ func setupInitialConfiguration() error {
 	log.Println("Registering known identities...")
 	
 	entries := map[string]sctx.RegistryEntry{
+		// Microservices for realistic demo
+		"order-service": {
+			Type:        "service",
+			Permissions: []string{"api:read", "api:write", "payments:process"},
+		},
+		"payment-service": {
+			Type:        "service",
+			Permissions: []string{"payments:process"},
+		},
+		// Legacy test clients
 		"client-app-1": {
 			Type:        "service",
 			Permissions: []string{"api:read", "api:write"},
@@ -138,37 +159,28 @@ func setupInitialConfiguration() error {
 	// Register context factories for pattern matching
 	log.Println("\nRegistering context factories...")
 	
-	factories := []*sctx.ContextFactory{
-		{
-			ID:           "dev-environment",
-			MatchField:   "CN",
-			MatchPattern: `^dev\.(.+)\.local$`,
-			ContextType:  "development",
-			Permissions:  []string{"dev:debug", "dev:logs"},
-			AllowRefresh: true,
-			MaxRefreshes: intPtr(10),
-			Enabled:      true,
-		},
-		{
-			ID:           "prod-environment",
-			MatchField:   "CN",
-			MatchPattern: `^prod\.(.+)\.local$`,
-			ContextType:  "production",
-			Permissions:  []string{"prod:read"},
-			AllowRefresh: true,
-			MaxRefreshes: intPtr(2),
-			Enabled:      true,
-		},
-		{
-			ID:           "team-services",
-			MatchField:   "CN",
-			MatchPattern: `\.(team-[^.]+)\.local$`,
-			ContextType:  "team",
-			Permissions:  []string{"team:collaborate"},
-			AllowRefresh: false,
-			Enabled:      true,
-		},
+	// Create factories using the constructor
+	devFactory, err := sctx.NewContextFactory("dev-environment", "CN", `^dev\.(.+)\.local$`, "development", []string{"dev:debug", "dev:logs"}, 0)
+	if err != nil {
+		return fmt.Errorf("failed to create dev factory: %w", err)
 	}
+	devFactory.AllowRefresh = true
+	devFactory.MaxRefreshes = intPtr(10)
+	
+	prodFactory, err := sctx.NewContextFactory("prod-environment", "CN", `^prod\.(.+)\.local$`, "production", []string{"prod:read"}, 0)
+	if err != nil {
+		return fmt.Errorf("failed to create prod factory: %w", err)
+	}
+	prodFactory.AllowRefresh = true
+	prodFactory.MaxRefreshes = intPtr(2)
+	
+	teamFactory, err := sctx.NewContextFactory("team-services", "CN", `\.(team-[^.]+)\.local$`, "team", []string{"team:collaborate"}, 0)
+	if err != nil {
+		return fmt.Errorf("failed to create team factory: %w", err)
+	}
+	teamFactory.AllowRefresh = false
+	
+	factories := []*sctx.ContextFactory{devFactory, prodFactory, teamFactory}
 	
 	for _, factory := range factories {
 		if err := serviceAdmin.RegisterFactory(factory); err != nil {
@@ -191,7 +203,9 @@ func setupInitialConfiguration() error {
 	}
 	log.Println("✓ Bootstrap completed - admin identity is now locked")
 	
-	return nil
+	// Register processors for request handling
+	log.Println("\nRegistering processors...")
+	return setupProcessors()
 }
 
 func startMainServer() {
@@ -292,6 +306,29 @@ func startAdminServer() {
 	}
 }
 
+func startHealthServer() {
+	mux := http.NewServeMux()
+	
+	// Simple health check without TLS
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if err := contextService.HealthCheck(); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte("OK"))
+	})
+	
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+	
+	log.Println("\n=== Health server listening on :8080 ===")
+	if err := server.ListenAndServe(); err != nil {
+		log.Printf("Health server failed: %v", err)
+	}
+}
+
 func handleContextRequest(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		http.Error(w, "No client certificate provided", http.StatusUnauthorized)
@@ -299,7 +336,7 @@ func handleContextRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Request context token
-	token, err := contextService.RequestContext(r.TLS)
+	token, err := contextService.RequestContext(r.TLS.PeerCertificates[0])
 	if err != nil {
 		log.Printf("Context request failed: %v", err)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -496,72 +533,27 @@ func intPtr(i int) *int {
 
 // createMemoryRegistry creates a registry for demo purposes
 func createMemoryRegistry() sctx.Registry {
-	// Since newMemoryRegistry is private, we need to create it manually
-	return &memoryRegistry{
-		entries: make(map[string]sctx.RegistryEntry),
-	}
+	return sctx.NewMemoryRegistry()
 }
 
-// memoryRegistry is a copy of sctx.MemoryRegistry for demo purposes
-type memoryRegistry struct {
-	mu      sync.RWMutex
-	entries map[string]sctx.RegistryEntry
-}
-
-func (r *memoryRegistry) Register(identity string, entry sctx.RegistryEntry) error {
-	if identity == "" {
-		return fmt.Errorf("identity cannot be empty")
-	}
+func setupProcessors() error {
+	// Get operations interface for processors
+	ops := serviceAdmin.GetOperations()
 	
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	// Create basic processors for demo
+	securityProcessor := sctx.NewSecurityProcessor[DemoMetadata](ops)
 	
-	r.entries[identity] = entry
+	// Register minimal pipeline for registry-based authentication
+	serviceAdmin.Register(
+		securityProcessor.CertificateValidator(),
+		securityProcessor.RegistryLookup(),
+		securityProcessor.DefaultDeny(),
+	)
+	
+	log.Println("✓ Processors registered successfully")
 	return nil
 }
 
-func (r *memoryRegistry) Lookup(identity string) (*sctx.RegistryEntry, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	entry, exists := r.entries[identity]
-	if !exists {
-		return nil, fmt.Errorf("identity not found in registry")
-	}
-	
-	// Return a copy to prevent external modification
-	result := sctx.RegistryEntry{
-		Type:        entry.Type,
-		Permissions: make([]string, len(entry.Permissions)),
-	}
-	copy(result.Permissions, entry.Permissions)
-	
-	return &result, nil
-}
-
-func (r *memoryRegistry) Remove(identity string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	
-	if _, exists := r.entries[identity]; !exists {
-		return fmt.Errorf("identity not found in registry")
-	}
-	
-	delete(r.entries, identity)
-	return nil
-}
-
-func (r *memoryRegistry) List() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	identities := make([]string, 0, len(r.entries))
-	for identity := range r.entries {
-		identities = append(identities, identity)
-	}
-	
-	return identities
-}
 
 // Helper to export private key for debugging
 func exportPrivateKey() {

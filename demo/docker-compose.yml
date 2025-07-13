@@ -19,14 +19,16 @@ services:
       cert-gen:
         condition: service_completed_successfully
     ports:
+      - "8080:8080"  # Health check port
       - "8443:8443"  # Main service port
       - "8444:8444"  # Admin port
     volumes:
       - ./certs:/app/certs:ro
+      - sctx-keys:/app
     environment:
       - LOG_LEVEL=debug
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "--cert", "/app/certs/sctx-admin/cert.pem", "--key", "/app/certs/sctx-admin/key.pem", "https://localhost:8443/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -44,15 +46,87 @@ services:
     working_dir: /
     command: sh -c "apk add --no-cache bash curl && /scripts/test-scenarios.sh"
 
+  # Order Service - demonstrates service-to-service auth
+  order-service:
+    build:
+      context: ..
+      dockerfile: demo/services/order-service/Dockerfile
+    depends_on:
+      sctx-demo:
+        condition: service_healthy
+    volumes:
+      - ./certs:/app/certs:ro
+      - sctx-keys:/app:ro
+    environment:
+      - SCTX_SERVER=https://sctx-demo:8443
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Payment Service - demonstrates permission-based access
+  payment-service:
+    build:
+      context: ..
+      dockerfile: demo/services/payment-service/Dockerfile
+    depends_on:
+      sctx-demo:
+        condition: service_healthy
+    volumes:
+      - ./certs:/app/certs:ro
+      - sctx-keys:/app:ro
+    environment:
+      - SCTX_SERVER=https://sctx-demo:8443
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Integration test runner - tests service-to-service flows
+  integration-test:
+    image: alpine:latest
+    depends_on:
+      order-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+      - ./scripts:/scripts:ro
+    working_dir: /
+    command: sh -c "apk add --no-cache bash curl && echo 'Running integration tests...' && /scripts/test-microservices.sh"
+    profiles:
+      - test
+
   # Interactive client for manual testing
   test-client:
     image: alpine:latest
     depends_on:
       sctx-demo:
         condition: service_healthy
+      order-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
     volumes:
       - ./certs:/certs:ro
     working_dir: /
-    command: sh -c "apk add --no-cache bash curl openssl && echo 'Interactive client ready. Use curl with client certs from /certs/' && tail -f /dev/null"
+    command: >
+      sh -c "apk add --no-cache bash curl openssl &&
+      echo 'Interactive client ready. Services available:' &&
+      echo '- SCTX Server: https://sctx-demo:8443' &&
+      echo '- Order Service: https://order-service:8080' &&
+      echo '- Payment Service: https://payment-service:8080' &&
+      echo 'Client certs in /certs/' &&
+      tail -f /dev/null"
     profiles:
       - interactive
+
+volumes:
+  sctx-keys:
